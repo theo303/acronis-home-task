@@ -2,9 +2,11 @@ package filereader
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -12,8 +14,9 @@ import (
 
 type fileReader struct {
 	*bufio.Reader
-	body     io.ReadCloser
-	ReadChan chan byte
+	body           io.ReadCloser
+	readChan       chan byte
+	fileDownloaded *os.File
 }
 
 func new(uri string) (*fileReader, error) {
@@ -25,22 +28,24 @@ func new(uri string) (*fileReader, error) {
 	return &fileReader{
 		Reader:   bufio.NewReader(resp.Body),
 		body:     resp.Body,
-		ReadChan: make(chan byte),
+		readChan: make(chan byte),
 	}, nil
 }
 
 func (fr *fileReader) readByteToChan() {
 	byteRead, readErr := fr.ReadByte()
 	if readErr != nil {
-		close(fr.ReadChan)
+		close(fr.readChan)
 		return
 	}
-	fr.ReadChan <- byteRead
+	fr.readChan <- byteRead
 }
 
-func (fr *fileReader) close() {
+func (fr *fileReader) close() error {
+	fr.fileDownloaded.Close()
 	fr.body.Close()
-	close(fr.ReadChan)
+	close(fr.readChan)
+	return nil
 }
 
 // FileReadersManager is used to manage all file readers
@@ -73,8 +78,11 @@ func (frm *FileReadersManager) Initialize(uri string) error {
 }
 
 // Process returns the content of the file(s) that contained the char on the earliest position
-func (frm *FileReadersManager) Process(char byte) map[string][]byte {
-	content := map[string][]byte{}
+func (frm *FileReadersManager) Process(char byte) (map[string][]byte, error) {
+	errFiles := frm.createFiles()
+	if errFiles != nil {
+		return nil, errFiles
+	}
 
 	charFound := false
 	for len(frm.Readers) != 0 {
@@ -82,7 +90,7 @@ func (frm *FileReadersManager) Process(char byte) map[string][]byte {
 		fileWithoutChar := []string{}
 		for file, reader := range frm.Readers {
 			go reader.readByteToChan()
-			byteRead, ok := <-reader.ReadChan
+			byteRead, ok := <-reader.readChan
 			if !ok {
 				delete(frm.Readers, file)
 				continue
@@ -92,18 +100,38 @@ func (frm *FileReadersManager) Process(char byte) map[string][]byte {
 			} else {
 				fileWithoutChar = append(fileWithoutChar, file)
 			}
-			content[file] = append(content[file], byteRead)
+
+			reader.fileDownloaded.Write([]byte{byteRead})
 		}
 		if len(fileWithChar) != 0 && !charFound {
 			charFound = true
 			for _, file := range fileWithoutChar {
 				frm.remove(file)
-				delete(content, file)
+				os.Remove("downloads/" + file)
 			}
 		}
 	}
 	if charFound {
-		return content
+		return nil, nil
+	}
+	return nil, nil
+}
+
+func (frm *FileReadersManager) createFiles() error {
+	path := "downloads"
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		errDir := os.Mkdir(path, os.ModePerm)
+		if errDir != nil {
+			return fmt.Errorf("creating directory: %w", errDir)
+		}
+	}
+
+	var errFile error
+	for filename, reader := range frm.Readers {
+		reader.fileDownloaded, errFile = os.Create("downloads/" + filename)
+		if errFile != nil {
+			return fmt.Errorf("creating file %s: %w", filename, errFile)
+		}
 	}
 	return nil
 }

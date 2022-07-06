@@ -17,7 +17,11 @@ func main() {
 	fileReaderMgr := filereader.FileReadersManager{}
 	fileReaderMgr.Initialize(uri)
 
-	filesToStore := fileReaderMgr.Process('A')
+	filesToStore, errProcess := fileReaderMgr.Process('A')
+	if errProcess != nil {
+		fmt.Printf("error during process: %v\n", errProcess)
+		return
+	}
 
 	for filename, content := range filesToStore {
 		os.WriteFile("downloads/"+filename, content, 0644)
