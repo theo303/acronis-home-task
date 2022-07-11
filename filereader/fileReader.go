@@ -53,7 +53,7 @@ type FileReadersManager struct {
 	content map[string][]byte
 }
 
-// Initialize creates a file reader for each file available on the uri
+// Initialize a file reader for each file available on the uri
 func (frm *FileReadersManager) Initialize(uri string) error {
 	filesList, listErr := listFiles(uri)
 	if listErr != nil {
@@ -87,7 +87,10 @@ func (frm *FileReadersManager) Process(char byte) {
 			go reader.readByteToChan()
 			byteRead, ok := <-reader.ReadChan
 			if !ok {
-				reader.close()
+				// file was read entirely before char was found
+				if !charFound {
+					delete(frm.content, file)
+				}
 				delete(frm.Readers, file)
 				continue
 			}
@@ -109,7 +112,6 @@ func (frm *FileReadersManager) Process(char byte) {
 			frm.finishReading()
 		}
 	}
-	fmt.Printf("Number of files to download: %d\n", len(frm.content))
 }
 
 func (frm *FileReadersManager) finishReading() {
